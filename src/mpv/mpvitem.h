@@ -135,7 +135,7 @@ public:
     void setAudioId(int value);
 
     Q_PROPERTY(QList<int> selectedAudioIds READ selectedAudioIds NOTIFY selectedAudioIdsChanged)
-    QList<int> selectedAudioIds();
+    QList<int> selectedAudioIds() const;
     Q_INVOKABLE void toggleAudioTrack(int trackId);
 
     Q_PROPERTY(int subtitleId READ subtitleId WRITE setSubtitleId NOTIFY subtitleIdChanged)
@@ -252,6 +252,15 @@ private:
     void onAsyncReply(const QVariant &data, mpv_event event);
     void onChapterChanged();
     void updateTaskbarPlaybackProgress();
+    void updateSelectedAudioIds(const QList<QVariant> &tracks);
+    void applyAudioSelection();
+    void finishAudioSelection();
+
+    enum class AudioSelectionStage {
+        Filter,
+        Track,
+        State,
+    };
 
     std::unique_ptr<TracksModel> m_audioTracksModel;
     std::unique_ptr<TracksModel> m_subtitleTracksModel;
@@ -272,6 +281,13 @@ private:
     int m_volumeMax{100};
     int m_audioId{0};
     bool m_audioMixActive{false};
+    bool m_audioSelectionPending{false};
+    QList<int> m_selectedAudioIds;
+    QList<int> m_requestedAudioIds;
+    QList<int> m_applyingAudioIds;
+    static constexpr int AudioSelectionRequestBase{1000};
+    int m_audioRequestId{AudioSelectionRequestBase};
+    AudioSelectionStage m_audioSelectionStage{AudioSelectionStage::State};
     int m_subtitleId{0};
     int m_secondarySubtitleId{0};
     int m_videoWidth{0};

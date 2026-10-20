@@ -445,7 +445,7 @@ void MpvItem::onPropertyChanged(const QString &property, const QVariant &value)
         Q_EMIT chapterListChanged();
 
     } else if (property == MpvProperties::self()->TrackList) {
-        Q_EMIT selectedAudioIdsChanged();
+        updateSelectedAudioIds(value.toList());
 
     } else if (property == MpvProperties::self()->AudioId) {
         m_audioId = value.toInt();
@@ -535,11 +535,15 @@ void MpvItem::loadFile(const QString &file)
     auto mute = m_mute;
     // mute to avoid popping sound while loading files
     setPropertyBlocking(MpvProperties::self()->Mute, true);
-    if (m_audioMixActive) {
-        setPropertyBlocking(u"lavfi-complex"_s, QString{});
-        setPropertyBlocking(MpvProperties::self()->AudioId, u"auto"_s);
-        m_audioMixActive = false;
+    if (m_audioMixActive || m_audioSelectionPending) {
+        setProperty(u"lavfi-complex"_s, QString{});
+        setProperty(MpvProperties::self()->AudioId, u"auto"_s);
     }
+    ++m_audioRequestId;
+    m_audioSelectionPending = false;
+    m_audioMixActive = false;
+    m_selectedAudioIds.clear();
+    Q_EMIT selectedAudioIdsChanged();
     command(QStringList() << u"loadfile"_s << m_currentUrl.toString());
     setPropertyBlocking(MpvProperties::self()->Mute, mute);
 
@@ -612,6 +616,42 @@ void MpvItem::loadTracks(const QList<QVariant> &tracks)
 
 void MpvItem::onAsyncReply(const QVariant &data, mpv_event event)
 {
+    if (event.reply_userdata >= AudioSelectionRequestBase) {
+        if (!m_audioSelectionPending || event.reply_userdata != static_cast<uint64_t>(m_audioRequestId)) {
+            return;
+        }
+        if (event.error < 0) {
+            m_audioSelectionPending = false;
+            Q_EMIT selectedAudioIdsChanged();
+            Q_EMIT MiscUtils::instance()->error(i18nc("@info", "Could not change the audio track selection."));
+            return;
+        }
+        switch (m_audioSelectionStage) {
+        case AudioSelectionStage::Filter:
+            m_audioMixActive = m_applyingAudioIds.size() > 1;
+            if (!m_audioMixActive) {
+                m_audioSelectionStage = AudioSelectionStage::Track;
+                const QVariant id = m_applyingAudioIds.isEmpty() ? QVariant(u"no"_s) : QVariant(m_applyingAudioIds.first());
+                setPropertyAsync(MpvProperties::self()->AudioId, id, ++m_audioRequestId);
+                return;
+            }
+            finishAudioSelection();
+            break;
+        case AudioSelectionStage::Track:
+            finishAudioSelection();
+            break;
+        case AudioSelectionStage::State:
+            updateSelectedAudioIds(data.toList());
+            m_audioSelectionPending = false;
+            if (m_requestedAudioIds != m_applyingAudioIds) {
+                applyAudioSelection();
+            }
+            Q_EMIT selectedAudioIdsChanged();
+            break;
+        }
+        return;
+    }
+
     switch (static_cast<AsyncIds>(event.reply_userdata)) {
     case AsyncIds::None: {
         break;
@@ -638,7 +678,7 @@ void MpvItem::onAsyncReply(const QVariant &data, mpv_event event)
         loadTracks(data.toList());
 
         const QVariant preferredAudioTrack = AudioSettings::preferredTrack();
-        if (!m_audioMixActive) {
+        if (!m_audioMixActive && !m_audioSelectionPending) {
             setAudioId(preferredAudioTrack.toInt());
         }
 
@@ -1032,40 +1072,42 @@ int MpvItem::audioId()
 
 void MpvItem::setAudioId(int value)
 {
-    if (m_audioMixActive) {
-        if (setPropertyBlocking(u"lavfi-complex"_s, QString{}) < 0) {
-            return;
-        }
-        m_audioMixActive = false;
-    } else if (value == audioId()) {
+    if (value > 0 && !m_audioMixActive && !m_audioSelectionPending && value == audioId()) {
         return;
     }
 
-    if (value == -1) {
-        // value is -1 when unchecking the selected track in the GUI
-        setProperty(MpvProperties::self()->AudioId, u"no"_s);
-        return;
-    }
-
-    if (!m_audioTracksModel->hasTrackId(value)) {
-        // when preferred track id set in the settings is not a valid track id
+    if (value != -1 && !m_audioTracksModel->hasTrackId(value)) {
+        // When the preferred track is unavailable, let mpv choose a track.
         setProperty(MpvProperties::self()->AudioId, u"auto"_s);
         return;
     }
-    setProperty(MpvProperties::self()->AudioId, value);
+    m_requestedAudioIds = value == -1 ? QList<int>{} : QList<int>{value};
+    if (!m_audioSelectionPending) {
+        applyAudioSelection();
+    }
+    Q_EMIT selectedAudioIdsChanged();
 }
 
-QList<int> MpvItem::selectedAudioIds()
+QList<int> MpvItem::selectedAudioIds() const
+{
+    return m_audioSelectionPending ? m_requestedAudioIds : m_selectedAudioIds;
+}
+
+void MpvItem::updateSelectedAudioIds(const QList<QVariant> &tracks)
 {
     QList<int> ids;
-    const auto tracks = getProperty(MpvProperties::self()->TrackList).toList();
     for (const auto &track : tracks) {
         const auto data = track.toMap();
         if (data.value(u"type"_s).toString() == u"audio"_s && data.value(u"selected"_s).toBool()) {
             ids.append(data.value(u"id"_s).toInt());
         }
     }
-    return ids;
+    if (ids != m_selectedAudioIds) {
+        m_selectedAudioIds = ids;
+        if (!m_audioSelectionPending) {
+            Q_EMIT selectedAudioIdsChanged();
+        }
+    }
 }
 
 void MpvItem::toggleAudioTrack(int trackId)
@@ -1078,28 +1120,41 @@ void MpvItem::toggleAudioTrack(int trackId)
     if (!ids.removeOne(trackId)) {
         ids.append(trackId);
     }
-
-    QString graph;
-    if (ids.size() > 1) {
-        for (const auto id : std::as_const(ids)) {
-            graph += u"[aid%1]"_s.arg(id);
-        }
-        graph += u"amix=inputs=%1[ao]"_s.arg(ids.size());
-    }
-
-    const auto previousGraph = getProperty(u"lavfi-complex"_s).toString();
-    if (setPropertyBlocking(u"lavfi-complex"_s, graph) < 0) {
-        setPropertyBlocking(u"lavfi-complex"_s, previousGraph);
-        Q_EMIT MiscUtils::instance()->error(i18nc("@info", "Could not change the audio track selection."));
-        Q_EMIT selectedAudioIdsChanged();
-        return;
-    }
-    m_audioMixActive = ids.size() > 1;
-    if (!m_audioMixActive) {
-        // Removing the filter graph does not restore mpv's audio selection.
-        setPropertyBlocking(MpvProperties::self()->AudioId, ids.isEmpty() ? QVariant(u"no"_s) : QVariant(ids.first()));
+    m_requestedAudioIds = ids;
+    if (!m_audioSelectionPending) {
+        applyAudioSelection();
     }
     Q_EMIT selectedAudioIdsChanged();
+}
+
+void MpvItem::applyAudioSelection()
+{
+    m_audioSelectionPending = true;
+    m_applyingAudioIds = m_requestedAudioIds;
+
+    if (!m_audioMixActive && m_applyingAudioIds.size() < 2) {
+        // A normal track change must not rebuild the filter graph.
+        m_audioSelectionStage = AudioSelectionStage::Track;
+        const QVariant id = m_applyingAudioIds.isEmpty() ? QVariant(u"no"_s) : QVariant(m_applyingAudioIds.first());
+        setPropertyAsync(MpvProperties::self()->AudioId, id, ++m_audioRequestId);
+        return;
+    }
+
+    QString graph;
+    if (m_applyingAudioIds.size() > 1) {
+        for (const auto id : std::as_const(m_applyingAudioIds)) {
+            graph += u"[aid%1]"_s.arg(id);
+        }
+        graph += u"amix=inputs=%1[ao]"_s.arg(m_applyingAudioIds.size());
+    }
+    m_audioSelectionStage = AudioSelectionStage::Filter;
+    setPropertyAsync(u"lavfi-complex"_s, graph, ++m_audioRequestId);
+}
+
+void MpvItem::finishAudioSelection()
+{
+    m_audioSelectionStage = AudioSelectionStage::State;
+    getPropertyAsync(MpvProperties::self()->TrackList, ++m_audioRequestId);
 }
 
 int MpvItem::subtitleId()
