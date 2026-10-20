@@ -10,7 +10,12 @@ SPDX-License-Identifier: CC-BY-4.0
 
 #### Donate: [GitHub Sponsors](https://github.com/sponsors/g-fb) | [Liberapay](https://liberapay.com/gfb/) | [PayPal](https://paypal.me/georgefloreabanus)
 
-# Haruna
+# Haruna Mix
+
+Haruna Mix is a fork of Haruna that allows simultaneous audio track selection.
+Check or uncheck individual tracks in **Audio → Track** to change the mix.
+Selecting one track restores normal playback; unchecking every track disables audio.
+The selection resets when opening another file.
 
 Haruna is an open source media player built with Qt/QML and libmpv.
 
@@ -52,9 +57,15 @@ Dependencies will be printed by `cmake` when building.
 # Build
 
 ```bash
-git clone https://invent.kde.org/multimedia/haruna.git
-cd haruna
-cmake -B build -G Ninja
-cmake --build build
-cmake --install build
+git clone https://github.com/daddyparodz/haruna-mix.git
+cd haruna-mix
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake --build build --parallel
+./build/bin/haruna
 ```
+
+Build locally with a C++ compiler, CMake, Ninja, Qt 6.9 or newer, KDE Frameworks
+6.24 or newer, MpvQt, KDSingleApplication, and the FFmpeg development libraries.
+CMake reports any missing dependencies. No GitHub Actions are required.
+
+To install the completed build, run `cmake --install build --prefix /your/prefix`.

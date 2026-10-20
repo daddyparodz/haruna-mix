@@ -134,6 +134,10 @@ public:
     int audioId();
     void setAudioId(int value);
 
+    Q_PROPERTY(QList<int> selectedAudioIds READ selectedAudioIds NOTIFY selectedAudioIdsChanged)
+    QList<int> selectedAudioIds();
+    Q_INVOKABLE void toggleAudioTrack(int trackId);
+
     Q_PROPERTY(int subtitleId READ subtitleId WRITE setSubtitleId NOTIFY subtitleIdChanged)
     int subtitleId();
     void setSubtitleId(int value);
@@ -210,6 +214,7 @@ Q_SIGNALS:
     void chapterChanged();
     void chapterListChanged();
     void audioIdChanged();
+    void selectedAudioIdsChanged();
     void subtitleIdChanged();
     void secondarySubtitleIdChanged();
     void isReadyChanged();
@@ -266,6 +271,7 @@ private:
     int m_volume{0};
     int m_volumeMax{100};
     int m_audioId{0};
+    bool m_audioMixActive{false};
     int m_subtitleId{0};
     int m_secondarySubtitleId{0};
     int m_videoWidth{0};

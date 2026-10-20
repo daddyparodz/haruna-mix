@@ -39,10 +39,10 @@ Menu {
             required property string codec
 
             checkable: true
-            checked: delegate.trackId === root.m_mpv.audioId
+            checked: root.m_mpv.selectedAudioIds.includes(delegate.trackId)
             text: delegate.displayText
             onTriggered: {
-                root.m_mpv.audioId = delegate.trackId === root.m_mpv.audioId ? -1 : delegate.trackId
+                root.m_mpv.toggleAudioTrack(delegate.trackId)
             }
         }
     }

@@ -36,13 +36,13 @@ Labs.Menu {
                 required property string language
                 required property string title
                 required property string codec
-                required property string trackId
+                required property int trackId
 
                 checkable: true
-                checked: delegate.trackId === root.m_mpv.audioId
+                checked: root.m_mpv.selectedAudioIds.includes(delegate.trackId)
                 text: delegate.displayText
                 onTriggered: {
-                    root.m_mpv.audioId = delegate.trackId === root.m_mpv.audioId ? -1 : delegate.trackId
+                    root.m_mpv.toggleAudioTrack(delegate.trackId)
                 }
             }
             onObjectAdded: function(index, object) {
